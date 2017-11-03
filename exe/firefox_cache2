@@ -111,26 +111,56 @@ class Runner
 
     path
   end
+
+  def target_time(entry)
+    case options.time_type
+    when :modified
+      entry.last_modified_at
+    when :expire
+      entry.expire_at
+    else
+      entry.last_fetched_at
+    end
+  end
+end
+
+module Orderable
+  def initialize(*)
+    super
+    @result = []
+  end
+
+  def process_entry(entry, profile_name)
+    @result << [entry, profile_name]
+  end
+
+  private
+
+  def sort_result!
+    @result.sort_by! {|entry, _| entry_sort_key(entry) }
+    @result.reverse! if options.reverse
+  end
+
+  def entry_sort_key(entry)
+    case options.order
+    when :uri
+      uri = URI.parse(entry.key)
+      [uri.host, uri.port, uri.path, uri.scheme, entry.key]
+    when :size
+      entry.content_size
+    when :time
+      target_time(entry)
+    end
+  end
 end
 
 # Print result as JSON
 class JsonRunner < Runner
-  def initialize(*)
-    super
-    @result = {}
-  end
-
-  def run(*)
-    super
-  end
-
-  def process_entry(entry, profile_name)
-    @result[profile_name] ||= []
-    @result[profile_name].push entry.to_h
-  end
+  include Orderable
 
   def print_result
-    print @result.to_json
+    sort_result!
+    print @result.map {|entry, profile_name| entry.to_h.merge(profile: profile_name) }.to_json
   end
 end
 
@@ -153,44 +183,14 @@ class TextRunner < Runner
     end
     print "\n"
   end
-
-  def target_time(entry)
-    case options.time_type
-    when :modified
-      entry.last_modified_at
-    when :expire
-      entry.expire_at
-    else
-      entry.last_fetched_at
-    end
-  end
 end
 
 # Print result as orderd text
 class OrderdTextRunner < TextRunner
-  def initialize(*)
-    super
-
-    @result = []
-  end
-
-  def process_entry(entry, profile_name)
-    @result << [entry, profile_name]
-  end
+  include Orderable
 
   def print_result
-    @result.sort_by! do |entry, _|
-      case options.order
-      when :uri
-        uri = URI.parse(entry.key)
-        [uri.host, uri.port, uri.path, uri.scheme, entry.key]
-      when :size
-        entry.content_size
-      when :time
-        target_time(entry)
-      end
-    end
-    @result.reverse! if options.reverse
+    sort_result!
     @result.each do |entry, profile_name|
       print_entry(entry, profile_name)
     end
