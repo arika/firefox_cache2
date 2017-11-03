@@ -29,6 +29,7 @@ module FirefoxCache2
         path: path,
         content_type: content_type,
         content_encoding: content_encoding,
+        content_size: content_size,
         version: version,
         fetch_count: fetch_count,
         last_fetched_at: last_fetched_at,
