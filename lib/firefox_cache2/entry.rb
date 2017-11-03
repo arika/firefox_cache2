@@ -92,8 +92,8 @@ module FirefoxCache2
       key = raw_key
       tags = []
       while /\A([pba]|i[^,]*|[ -~&&[^:]](?:,,|[^,])*),/o =~ key
-        tags.push $1
         key = $'
+        tags.push $1.gsub(/,,/, ',')
       end
 
       [key.sub(/\A:/o, ''), tags]
