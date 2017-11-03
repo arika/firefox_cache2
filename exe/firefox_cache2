@@ -1,0 +1,286 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'firefox_cache2/version'
+require 'firefox_cache2'
+require 'optparse'
+require 'json'
+require 'uri'
+require 'fileutils'
+
+# Abstract runner class
+class Runner
+  attr_reader :options
+
+  def initialize(options)
+    @options = options
+  end
+
+  def process(profile_name)
+    entries_dir = FirefoxCache2.entries_dir(profile_name)
+    return unless entries_dir
+
+    Dir.foreach(entries_dir) do |fn|
+      next if /\A\./o.match?(fn)
+
+      entry = FirefoxCache2::Entry.new("#{entries_dir}/#{fn}")
+      next unless match_cache2_entry?(entry, options)
+
+      process_entry(entry, profile_name)
+      copy_content(entry) if options.content_dest
+    end
+
+    print_result
+  end
+
+  def process_entry(_entry, _profile_name)
+    raise NotImplementedError
+  end
+
+  def print_result; end
+
+  private
+
+  def match_cache2_entry?(entry, options)
+    return options.regexp.match?(entry.key) unless options.match_all
+    entry.each_pair.any? do |_, value|
+      if value.is_a?(Hash)
+        value.any? {|_, v| options.regexp.match?(v) }
+      else
+        options.regexp.match?(value.to_s)
+      end
+    end
+  end
+
+  def copy_content(entry)
+    uri = URI.parse(entry.key)
+    base = content_basename(uri)
+    ext = content_extname(uri, entry.content_type, entry.content_encoding)
+    dest = generate_content_path(options.content_dest, base, ext)
+
+    FileUtils.mkdir_p(options.content_dest)
+    File.open(dest, 'w', encoding: 'BINARY') {|io| io.write entry.content }
+  end
+
+  def extname_from_content_type(content_type)
+    case content_type
+    when %r{(?:text|image|application)/(jpe?g|png|svg|gif|html?|css|xml|js|json)}io
+      ".#{$1.downcase}"
+    when %r{(?:text|application)/javascript}io
+      '.js'
+    when %r{text/plain}io
+      '.txt'
+    else
+      ''
+    end
+  end
+
+  def extname_from_content_encoding(content_encoding)
+    case content_encoding
+    when 'gzip'
+      '.gz'
+    else
+      ''
+    end
+  end
+
+  def content_basename(uri)
+    fn_base = if uri.path.empty? || %r{/\z}o.match?(uri.path)
+                'index'
+              else
+                File.basename(uri.path, '.*').gsub(%r{[/\\]}o, '_')
+              end
+    fn_base[0, 100] # avoid too long filename
+  end
+
+  def content_extname(uri, content_type, content_encoding)
+    fn_ext = File.extname(uri.path)
+    fn_ext = extname_from_content_type(content_type) if fn_ext.empty?
+    fn_ext += extname_from_content_encoding(content_encoding)
+    fn_ext
+  end
+
+  def generate_content_path(dest_dir, base, ext)
+    path = "#{dest_dir}/#{base}#{ext}"
+    i = 0
+
+    while File.exist?(path)
+      i += 1
+      path = "#{dest_dir}/#{base}-#{i}#{ext}"
+    end
+
+    path
+  end
+end
+
+# Print result as JSON
+class JsonRunner < Runner
+  def initialize(*)
+    super
+    @result = {}
+  end
+
+  def run(*)
+    super
+  end
+
+  def process_entry(entry, profile_name)
+    @result[profile_name] ||= []
+    @result[profile_name].push entry.to_h
+  end
+
+  def print_result
+    print @result.to_json
+  end
+end
+
+# Pirnt result as text
+class TextRunner < Runner
+  def process_entry(entry, profile_name)
+    print_entry(entry, profile_name)
+  end
+
+  private
+
+  def print_entry(entry, profile_name)
+    print "#{profile_name}:" if options.headers && options.profile_names.size > 1
+    print entry.key
+    if options.output_format == :full
+      t = target_time(entry)
+      print " (#{options.time_type} at #{t.strftime('%Y-%m-%d %H:%M:%S %z')},"
+      print " #{entry.content_type}" if entry.content_type
+      print " #{entry.content_size} bytes)"
+    end
+    print "\n"
+  end
+
+  def target_time(entry)
+    case options.time_type
+    when :modified
+      entry.last_modified_at
+    when :expire
+      entry.expire_at
+    else
+      entry.last_fetched_at
+    end
+  end
+end
+
+# Print result as orderd text
+class OrderdTextRunner < TextRunner
+  def initialize(*)
+    super
+
+    @result = []
+  end
+
+  def process_entry(entry, profile_name)
+    @result << [entry, profile_name]
+  end
+
+  def print_result
+    @result.sort_by! do |entry, _|
+      case options.order
+      when :uri
+        uri = URI.parse(entry.key)
+        [uri.host, uri.port, uri.path, uri.scheme, entry.key]
+      when :size
+        entry.content_size
+      when :time
+        target_time(entry)
+      end
+    end
+    @result.reverse! if options.reverse
+    @result.each do |entry, profile_name|
+      print_entry(entry, profile_name)
+    end
+  end
+end
+
+options = OpenStruct.new(
+  match_all: false,
+  invert: false,
+  headers: true,
+  output_format: :full,
+  time_type: :fetched,
+)
+
+OptionParser.new do |o|
+  o.banner = "Usage: firefox_cache2 [options] [regexp [profile-name...]]"
+
+  o.on('-a', '--all', 'Try to match to all metadata') do
+    options.match_all = true
+  end
+
+  o.on('-P', '--no-profile-name', 'Never print profile name') do
+    options.headers = false
+  end
+
+  o.on('-f FORMAT', '--format=FORMAT', 'Print format (FORMAT: full, uri, json)') do |v|
+    options.output_format = v.to_sym if %w[full uri json].include?(v)
+  end
+
+  o.on('-U', '--uri', 'Print URI only') do
+    options.output_format = :uri
+  end
+
+  o.on('-j', '--json', 'Print as JSON') do
+    options.output_format = :json
+  end
+
+  o.on('--order=TYPE', 'Sort by TYPE (TYPE: uri, time, size)') do |v|
+    options.order = v.to_sym if %w[uri time size].include?(v)
+  end
+
+  o.on('-u', 'Sort by URI') do
+    options.order = :uri
+  end
+
+  o.on('-t', 'Sort by time') do
+    options.order = :time
+  end
+
+  o.on('-S', 'Sort by content size') do
+    options.order = :size
+  end
+
+  o.on('-r', 'Reverse order') do
+    options.reverse = true
+  end
+
+  o.on('--time=TYPE', 'Type of time to print or sort (TYPE: fetched, modified, expire)') do |v|
+    options.time_type = v.to_sym if %w[fetched modified expire].include?(v)
+  end
+
+  o.on('-o DIR', '--output=DIR', 'Extract contents in DIR') do |v|
+    options.content_dest = v
+  end
+
+  o.on('-h', '--help', 'Show usage') do
+    print o
+    exit
+  end
+end.parse!
+
+options.extract_body = true if options.content_dest
+options.regexp = Regexp.new(ARGV.shift || '.')
+options.profile_names =
+  if ARGV.empty?
+    FirefoxCache2.profile_dirs.map {|path| File.basename(path).split(/\./o, 2).last }
+  else
+    options.profile_names = ARGV.to_a
+  end
+
+runner_class =
+  if options.output_format == :json
+    JsonRunner
+  elsif options.order
+    OrderdTextRunner
+  else
+    TextRunner
+  end
+
+runner = runner_class.new(options)
+options.profile_names.each do |profile_name|
+  runner.process(profile_name)
+end
