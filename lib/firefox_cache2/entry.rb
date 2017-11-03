@@ -91,7 +91,7 @@ module FirefoxCache2
     def parse_raw_key(raw_key)
       key = raw_key
       tags = []
-      while /\A([pba]|i[^,]*|[ -~&&[^:]](?:,,|[^,])*),/o =~ key
+      while /\A([pba]|i[^,]*|[ -~&&[^:]](?>,,|[^,])*),/o =~ key
         key = $'
         tags.push $1.gsub(/,,/, ',')
       end
