@@ -8,11 +8,6 @@ require 'uri'
 require 'json'
 require 'optparse'
 
-# Firefox cache2 module
-#
-# ref:
-# * https://github.com/JamesHabben/FirefoxCache2
-# * http://encase-forensic-blog.guidancesoftware.com/2015/02/firefox-cache2-storage-breakdown.html
 module FirefoxCache2
   BASE_DIRS = [
     ENV['XDG_CACHE_HOME'] ? "#{ENV['XDG_CACHE_HOME']}/mozilla/firefox" : '~/.cache/mozilla/firefox',

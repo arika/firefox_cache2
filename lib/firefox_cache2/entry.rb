@@ -2,6 +2,10 @@
 
 module FirefoxCache2
   # Firefox cache2 entry file class
+  #
+  # ref:
+  # * https://github.com/JamesHabben/FirefoxCache2
+  # * http://encase-forensic-blog.guidancesoftware.com/2015/02/firefox-cache2-storage-breakdown.html
   class Entry
     include Enumerable
 
